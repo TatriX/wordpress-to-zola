@@ -28,12 +28,14 @@
 //!
 //! [zola][https://www.getzola.org/]
 
+use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
 use chrono::{DateTime, FixedOffset};
-use html2md::parse_html;
+use html2md::*;
+use markup5ever::rcdom::NodeData;
 use log::*;
 use serde::Deserialize;
 use serde_xml_rs::from_reader;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::fs::create_dir_all;
 use std::fs::File;
 use std::env::args;
@@ -92,7 +94,7 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
                 let date = DateTime::parse_from_rfc2822(&item.pub_date)
                     .expect("cannot parse pubDate");
 
-                let markdown = parse_html(item.content());
+                let markdown = generate_markdown(item.content());
                 debug!("{}", markdown);
 
                 create_page(&path, &item.title, date, &markdown)?;
@@ -180,10 +182,57 @@ fn create_page(path: &Path, title: &str, date: DateTime<FixedOffset>, markdown: 
     Ok(())
 }
 
+// TODO: extract to a file
+struct ImgParser;
+
+impl TagHandlerFactory for ImgParser {
+    fn instantiate(&self) -> Box<TagHandler> {
+        Box::new(ImgParser{})
+    }
+}
+
+impl TagHandler for ImgParser {
+    fn handle(&mut self, tag: &Handle, printer: &mut StructuredPrinter) {
+        let src = get_tag_attr(tag, "src");
+        let alt = get_tag_attr(tag, "alt");
+        let title = get_tag_attr(tag, "title");
+        let height = get_tag_attr(tag, "height");
+        printer.append_str(
+                &format!("![{}]({}{})",
+                    alt.unwrap_or_default(),
+                    utf8_percent_encode(&src.unwrap_or_default(), DEFAULT_ENCODE_SET),
+                    title.map(|value| format!(" \"{}\"", value)).unwrap_or_default()));
+    }
+
+    fn after_handle(&mut self, printer: &mut StructuredPrinter) {
+
+    }
+}
+
+/// Generate markdown from post html content
+fn generate_markdown(content: &str) -> String {
+    let mut custom_handler = HashMap::new();
+    let img_parser: Box<dyn TagHandlerFactory> = Box::new(ImgParser);
+    custom_handler.insert("img".to_string(), img_parser);
+    parse_html_custom(content, &custom_handler)
+}
+
 /// Generate path for an item by splicing base url from the link.
 fn generate_path(base_url: &str, link: &str) -> PathBuf {
     PathBuf::from(format!(
         "{}.md",
         link.trim_left_matches(&base_url).trim_matches('/')
     ))
+}
+
+
+pub fn get_tag_attr(tag: &Handle, attr_name: &str) -> Option<String> {
+    match tag.data {
+        NodeData::Element { ref attrs, .. } => {
+            let attrs = attrs.borrow();
+            let requested_attr = attrs.iter().find(|attr| attr.name.local.to_string() == attr_name);
+            return requested_attr.map(|attr| attr.value.to_string());
+        }
+        _ => return None
+    }
 }
