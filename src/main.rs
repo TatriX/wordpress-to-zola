@@ -184,6 +184,6 @@ fn create_page(path: &Path, title: &str, date: DateTime<FixedOffset>, markdown: 
 fn generate_path(base_url: &str, link: &str) -> PathBuf {
     PathBuf::from(format!(
         "{}.md",
-        link.trim_left_matches(&base_url).trim_matches('/')
+        link.trim_start_matches(&base_url).trim_matches('/')
     ))
 }
