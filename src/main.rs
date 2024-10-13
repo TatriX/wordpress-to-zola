@@ -96,9 +96,9 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
                 debug!("{}", markdown);
 
                 create_page(&path, &item.title, date, &markdown)?;
-
-            },
-            _ => debug!("Ignoring attachment {}", item.title),
+            }
+            PostType::Attachment => debug!("Ignoring attachment {}", item.title),
+            _ => debug!("Ignoring unknown post type {}", item.title),
         }
     }
     Ok(())
@@ -145,6 +145,8 @@ impl Item {
 enum PostType {
     Attachment,
     Post,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
