@@ -37,7 +37,7 @@ use std::collections::HashSet;
 use std::env::args;
 use std::fs::create_dir_all;
 use std::fs::File;
-use std::io::{Result, Write};
+use std::io::{Read, Result, Write};
 use std::path::{Path, PathBuf};
 
 /// Paginate section by this number of posts.
@@ -48,7 +48,9 @@ fn main() -> Result<()> {
     env_logger::init();
 
     if let [input, output] = args().skip(1).take(2).collect::<Vec<_>>().as_slice() {
-        convert(input.into(), output.into())?;
+        let fs = RealFs {};
+
+        convert(input.into(), output.into(), &fs)?;
     } else {
         eprintln!("Usage: wordpress-to-zola ./input.xml ./output-dir");
     }
@@ -57,8 +59,8 @@ fn main() -> Result<()> {
 
 /// Read xml from `input_file` and create `zola` content directory in
 /// `output_dir`.
-fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
-    let file = File::open(input_file)?;
+fn convert(input_file: PathBuf, output_dir: PathBuf, fs: &impl Fs) -> Result<()> {
+    let file = fs.open(&input_file)?;
     let rss: Rss = from_reader(file).expect("cannot parse xml");
 
     // We want to strip `base_url` from posts url later on to get a
@@ -82,11 +84,11 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
                 let section = path.parent().expect("no parent in filename");
                 // ensure all directories are in place
                 debug!("Creating directory {:?}", section);
-                create_dir_all(&path.parent().expect("no parent in filename"))?;
+                fs.create_dir_all(&path.parent().expect("no parent in filename"))?;
 
                 // if it's the first time we see this section, create section file
                 if sections.insert(section.to_owned()) {
-                    create_section(section)?;
+                    fs.create_section(section)?;
                 }
 
                 let date =
@@ -95,7 +97,7 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
                 let markdown = parse_html(item.content());
                 debug!("{}", markdown);
 
-                create_page(&path, &item.title, date, &markdown)?;
+                fs.create_page(&path, &item.title, date, &markdown)?;
             }
             PostType::Attachment => debug!("Ignoring attachment {}", item.title),
             _ => debug!("Ignoring unknown post type {}", item.title),
@@ -157,33 +159,67 @@ enum Status {
     Private,
 }
 
-/// Create section `_index.md` file.
-fn create_section(section: &Path) -> Result<()> {
-    let mut file = File::create(section.join("_index.md"))?;
-    writeln!(file, "+++")?;
-    writeln!(file, "transparent = true")?; // show pages from this section in index.html
-    writeln!(file, "sort_by = \"date\"")?;
-    writeln!(file, "paginate_by = {}", PAGINATE_BY)?;
-    writeln!(file, "+++")?;
-    Ok(())
+trait Fs {
+    fn open(&self, path: &PathBuf) -> Result<impl Read>;
+
+    fn create_dir_all<P>(&self, path: P) -> Result<()>
+    where
+        P: AsRef<Path>;
+
+    fn create_page(
+        &self,
+        path: &Path,
+        title: &str,
+        date: DateTime<FixedOffset>,
+        markdown: &str,
+    ) -> Result<()>;
+
+    fn create_section(&self, section: &Path) -> Result<()>;
 }
 
-/// Create post file
-fn create_page(
-    path: &Path,
-    title: &str,
-    date: DateTime<FixedOffset>,
-    markdown: &str,
-) -> Result<()> {
-    let mut file = File::create(path)?;
-    // write front-matter
-    writeln!(file, "+++")?;
-    writeln!(file, "title = \"{}\"", title)?;
-    writeln!(file, "date = {}", date.to_rfc3339())?;
-    writeln!(file, "+++")?;
-    // and content
-    writeln!(file, "{}", markdown)?;
-    Ok(())
+struct RealFs {}
+
+impl Fs for RealFs {
+    fn open(&self, path: &PathBuf) -> Result<impl Read> {
+        File::open(path)
+    }
+
+    fn create_dir_all<P>(&self, path: P) -> Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        create_dir_all(path)
+    }
+
+    /// Create post file
+    fn create_page(
+        &self,
+        path: &Path,
+        title: &str,
+        date: DateTime<FixedOffset>,
+        markdown: &str,
+    ) -> Result<()> {
+        let mut file = File::create(path)?;
+        // write front-matter
+        writeln!(file, "+++")?;
+        writeln!(file, "title = \"{}\"", title)?;
+        writeln!(file, "date = {}", date.to_rfc3339())?;
+        writeln!(file, "+++")?;
+        // and content
+        writeln!(file, "{}", markdown)?;
+        Ok(())
+    }
+
+    /// Create section `_index.md` file.
+    fn create_section(&self, section: &Path) -> Result<()> {
+        let mut file = File::create(section.join("_index.md"))?;
+        writeln!(file, "+++")?;
+        writeln!(file, "transparent = true")?; // show pages from this section in index.html
+        writeln!(file, "sort_by = \"date\"")?;
+        writeln!(file, "paginate_by = {}", PAGINATE_BY)?;
+        writeln!(file, "+++")?;
+        Ok(())
+    }
 }
 
 /// Generate path for an item by splicing base url from the link.
@@ -192,4 +228,141 @@ fn generate_path(base_url: &str, link: &str) -> PathBuf {
         "{}.md",
         link.trim_start_matches(&base_url).trim_matches('/')
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use crate::{convert, Fs};
+
+    struct FakeFs {
+        input: String,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl FakeFs {
+        fn new(input: &str) -> Self {
+            Self {
+                input: input.to_owned(),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl Fs for FakeFs {
+        fn open(&self, _path: &std::path::PathBuf) -> std::io::Result<impl std::io::Read> {
+            Ok(self.input.as_bytes())
+        }
+
+        fn create_dir_all<P>(&self, path: P) -> std::io::Result<()>
+        where
+            P: AsRef<std::path::Path>,
+        {
+            self.calls
+                .borrow_mut()
+                .push(format!("create_dir_all({:?})", path.as_ref()));
+            Ok(())
+        }
+
+        fn create_page(
+            &self,
+            path: &std::path::Path,
+            title: &str,
+            date: chrono::DateTime<chrono::FixedOffset>,
+            markdown: &str,
+        ) -> std::io::Result<()> {
+            self.calls.borrow_mut().push(format!(
+                "create_page({:?}, {}, {}, {})",
+                path, title, date, markdown
+            ));
+            Ok(())
+        }
+
+        fn create_section(&self, section: &std::path::Path) -> std::io::Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("create_section({:?})", section));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn normal_posts_are_converted() {
+        // Given a WP export with a post in it
+        let input = r#"<?xml version="1.0" encoding="UTF-8" ?>
+            <rss version="2.0"
+                xmlns:content="http://purl.org/rss/1.0/modules/content/"
+                xmlns:wp="http://wordpress.org/export/1.2/"
+            >
+            <channel>
+                <title>Blog</title>
+                <wp:base_site_url>https://example.com</wp:base_site_url>
+                <item>
+                    <title>Post 1</title>
+                    <pubDate>Mon, 01 Sep 2008 21:02:27 +0000</pubDate>
+                    <description></description>
+                    <link>http://example.com/post1</link>
+                    <content:encoded><![CDATA[]]></content:encoded>
+                    <wp:post_type><![CDATA[post]]></wp:post_type>
+                    <wp:status><![CDATA[publish]]></wp:status>
+                </item>
+            </channel>
+        </rss>
+        "#;
+
+        // When we convert it
+        let fs = FakeFs::new(input);
+        convert("".into(), "output".into(), &fs).unwrap();
+
+        // Then we create a post and section
+        assert_eq!(
+            fs.calls(),
+            &[
+                "create_dir_all(\"output/http://example.com\")",
+                "create_section(\"output/http://example.com\")",
+                "create_page(\
+                    \"output/http://example.com/post1.md\", \
+                    Post 1, \
+                    2008-09-01 21:02:27 +00:00, \
+                )",
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_post_types_are_ignored() {
+        // Given a blog item wpcode post_tyoe
+        let input = r#"<?xml version="1.0" encoding="UTF-8" ?>
+            <rss version="2.0"
+                xmlns:content="http://purl.org/rss/1.0/modules/content/"
+                xmlns:wp="http://wordpress.org/export/1.2/"
+            >
+            <channel>
+                <title>Blog</title>
+                <wp:base_site_url>https://example.com</wp:base_site_url>
+                <item>
+                    <title>Post 1</title>
+                    <pubDate>Mon, 01 Sep 2008 21:02:27 +0000</pubDate>
+                    <description></description>
+                    <link>http://example.com/post1</link>
+                    <content:encoded><![CDATA[]]></content:encoded>
+                    <wp:post_type><![CDATA[wpcode]]></wp:post_type>
+                    <wp:status><![CDATA[publish]]></wp:status>
+                </item>
+            </channel>
+        </rss>
+        "#;
+
+        // When we convert it
+        let fs = FakeFs::new(input);
+        convert("".into(), "output".into(), &fs).unwrap();
+
+        // Then nothing was generated
+        assert!(fs.calls().is_empty());
+    }
 }
