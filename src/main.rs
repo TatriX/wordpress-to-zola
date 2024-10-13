@@ -34,9 +34,9 @@ use log::*;
 use serde::Deserialize;
 use serde_xml_rs::from_reader;
 use std::collections::HashSet;
+use std::env::args;
 use std::fs::create_dir_all;
 use std::fs::File;
-use std::env::args;
 use std::io::{Result, Write};
 use std::path::{Path, PathBuf};
 
@@ -72,7 +72,7 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
     for item in rss.channel.item {
         match item.status {
             Status::Publish => {} // take only published posts
-            _ => continue, // skip everything else
+            _ => continue,        // skip everything else
         }
         match item.post_type {
             PostType::Post => {
@@ -89,8 +89,8 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
                     create_section(section)?;
                 }
 
-                let date = DateTime::parse_from_rfc2822(&item.pub_date)
-                    .expect("cannot parse pubDate");
+                let date =
+                    DateTime::parse_from_rfc2822(&item.pub_date).expect("cannot parse pubDate");
 
                 let markdown = parse_html(item.content());
                 debug!("{}", markdown);
@@ -103,7 +103,6 @@ fn convert(input_file: PathBuf, output_dir: PathBuf) -> Result<()> {
     }
     Ok(())
 }
-
 
 /// Top level wrapper
 #[derive(Debug, Deserialize)]
@@ -170,7 +169,12 @@ fn create_section(section: &Path) -> Result<()> {
 }
 
 /// Create post file
-fn create_page(path: &Path, title: &str, date: DateTime<FixedOffset>, markdown: &str) -> Result<()> {
+fn create_page(
+    path: &Path,
+    title: &str,
+    date: DateTime<FixedOffset>,
+    markdown: &str,
+) -> Result<()> {
     let mut file = File::create(path)?;
     // write front-matter
     writeln!(file, "+++")?;
