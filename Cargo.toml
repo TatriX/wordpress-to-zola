@@ -11,3 +11,7 @@ log = "0.4.6"
 env_logger = "0.6.1"
 html2md = "0.2.8"
 chrono = {version = "0.4.6", features = ["serde"]}
+html5ever = "0.26.0"
+markup5ever_rcdom = "0.2.0"
+regex = "1.11.0"
+itertools = "0.13.0"
