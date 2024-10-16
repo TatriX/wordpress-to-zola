@@ -95,6 +95,7 @@ fn convert(input_file: PathBuf, output_dir: PathBuf, fs: &impl Fs) -> Result<()>
                     DateTime::parse_from_rfc2822(&item.pub_date).expect("cannot parse pubDate");
 
                 let markdown = parse_html(item.content());
+                let markdown = markdown.replace("[]()", "");
                 debug!("{}", markdown);
 
                 fs.create_page(&path, &item.title.replace('"', "\\\""), date, &markdown)?;
@@ -404,6 +405,50 @@ mod tests {
                     \"output/http://example.com/post1.md\", \
                     Post \\\"1\\\", \
                     2008-09-01 21:02:27 +00:00, \
+                )",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_links_are_removed() {
+        // Given a blog item with empty links
+        let input = r#"<?xml version="1.0" encoding="UTF-8" ?>
+            <rss version="2.0"
+                xmlns:content="http://purl.org/rss/1.0/modules/content/"
+                xmlns:wp="http://wordpress.org/export/1.2/"
+            >
+            <channel>
+                <title>Blog</title>
+                <wp:base_site_url>https://example.com</wp:base_site_url>
+                <item>
+                    <title>Post "1"</title>
+                    <pubDate>Mon, 01 Sep 2008 21:02:27 +0000</pubDate>
+                    <description></description>
+                    <link>http://example.com/post1</link>
+                    <content:encoded><![CDATA[Foo []() Bar]]></content:encoded>
+                    <wp:post_type><![CDATA[post]]></wp:post_type>
+                    <wp:status><![CDATA[publish]]></wp:status>
+                </item>
+            </channel>
+        </rss>
+        "#;
+
+        // When we convert it
+        let fs = FakeFs::new(input);
+        convert("".into(), "output".into(), &fs).unwrap();
+
+        // Then the created post escapes the quotes in the title
+        assert_eq!(
+            fs.calls(),
+            &[
+                "create_dir_all(\"output/http://example.com\")",
+                "create_section(\"output/http://example.com\")",
+                "create_page(\
+                    \"output/http://example.com/post1.md\", \
+                    Post \\\"1\\\", \
+                    2008-09-01 21:02:27 +00:00, \
+                    Foo  Bar\
                 )",
             ]
         );
