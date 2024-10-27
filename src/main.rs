@@ -97,8 +97,6 @@ fn convert(input_file: PathBuf, output_dir: PathBuf, fs: &impl Fs) -> Result<()>
                 let date =
                     DateTime::parse_from_rfc2822(&item.pub_date).expect("cannot parse pubDate");
 
-                let markdown = parse_html(item.content());
-                debug!("{}", markdown);
                 let html = transform_html(item.content());
                 let markdown = parse_html(&html);
 
